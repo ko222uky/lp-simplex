@@ -27,7 +27,7 @@ So for a given LP, we have:
 |---|---|---|
 |Constraint| A x <= b | A'y >= c |
 |Point| x0 >= 0 | y0 >= 0 |
-|Slack| add s₁: b = A x0 + s₁ | subtract s₂: c = A'y0 − s₂|
+|Slack| add s1: b = A x0 + s1 | subtract s2: c = A'y0 − s2|
 |Result| x0 is primal-feasible |y0 is dual-feasible|
 
 Worked this out from: https://en.wikipedia.org/wiki/Dual_linear_program
@@ -108,7 +108,7 @@ function example_lp(
     # this is like adding an independent, non-interacting addition to the original lecture problem.
     # if we want new constraints
     A_full = blockdiag(sparse(A), A2)   # easiest way to extend this.
-                                        # results in a (2 + additional_m) × (4 + additional_n)
+                                        # results in a (2 + additional_m) x (4 + additional_n)
                                         # so, this is basically like:
                                         # A_full = [ A   0  ]     rows:    2 lecture constraints, then additional_m random ones
                                         #          [ 0   A2 ]     columns: 4 lecture variables,   then additional_n random ones
@@ -129,10 +129,7 @@ function example_lp(
         ]
 
 
-
-        # # OLD: this was due to B being negative. I think keeping B positive removes this complication.
-        # # keeping for reference though.
-        # # But I noticed that making B positive results in DUAL_INFEASIBLE. 
+        # # I noticed that making B positive results in DUAL_INFEASIBLE. 
         # # so, let's just fix B with the following by adjusting b2.
         # # b2 above only guarantees the new rows hold at [0; x0], which assumes the lecture vars are zero
         # # BUT the lecture variables are nonzero. So we need to think about a hypothetical point like [x_lec; x0] that satisfies constraints,
@@ -143,11 +140,16 @@ function example_lp(
                                      # so we adjust b2 (right side of constraint) to basically lower the target by similar amount
                                      
                                      # The top row:
-                                     # *x_lec + C*x0  >=  b
+                                     # A*x_lec + C*x0  >=  b
 
                                      # the bottom row:
                                      
-                                     #      B*x_lec + A2*x0  >=  b2
+                                     #      B*x_lec + A2*x0  >=  b2 new
+
+                                     # before, we had B*x_lec + A2*x0 >= b2 old,
+                                     # where B is negative. So the left side would be pulled down by this neg term.
+                                     # which means in some cases  B*x_lec + A2*x0 would NOT be >= b2 old, and we'd get primal infeasibility.
+                                     # but the change guarantees the bottom row satisfies A2*x0  >=  b2 old
               
 
 
