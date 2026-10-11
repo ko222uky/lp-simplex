@@ -102,7 +102,7 @@ function example_lp(
     A2  = sprandn(rng, additional_m, additional_n, density) # we can specify the matrix density, to have "holes" in the constraints 
     x0 = rand(rng, additional_n) 
     y0 = rand(rng, additional_m) 
-    b2  = A2 * x0 .- rand(rng, additional_m) 
+    b2  = A2 * x0 .- rand(rng, additional_m) # built to handle just the A2 part
     c2  = A2' * y0 .+ rand(rng, additional_n) 
 
     # this is like adding an independent, non-interacting addition to the original lecture problem.
@@ -115,15 +115,43 @@ function example_lp(
 
     # we can fill in the zeros with the following:
     # in this case, we have A_full = [A C;
-    #                                B A2]
+    #                                B A2] # so B has additional_m rows, and b2 is length additional_m
     if affect_orig_constraints
+        # I think this will not guarantee feasibility by doing this.
+        # getting INFEASIBLE status...
         m1, n1 = size(A)
         C  =  abs.(sprandn(rng, m1, additional_n, density))
-        B  = -abs.(sprandn(rng, additional_m, n1, density))
+        B  = -abs.(sprandn(rng, additional_m, n1, density)) # B is all negative
+        # B  = abs.(sprandn(rng, additional_m, n1, density))
         A_full = [
             A C;
             B A2
         ]
+
+
+
+        # # OLD: this was due to B being negative. I think keeping B positive removes this complication.
+        # # keeping for reference though.
+        # # But I noticed that making B positive results in DUAL_INFEASIBLE. 
+        # # so, let's just fix B with the following by adjusting b2.
+        # # b2 above only guarantees the new rows hold at [0; x0], which assumes the lecture vars are zero
+        # # BUT the lecture variables are nonzero. So we need to think about a hypothetical point like [x_lec; x0] that satisfies constraints,
+        # # or else we'll be infeasible.
+        x_lec = [2.0, 0.0, 0.0, 1.0] # feasible for orig lecture vars
+        b2 = b2 .+ B * x_lec         # since b2 was for A2 only and not A, this will result in infeasibility,
+                                     # if we just fill in the gaps
+                                     # so we adjust b2 (right side of constraint) to basically lower the target by similar amount
+                                     
+                                     # The top row:
+                                     # *x_lec + C*x0  >=  b
+
+                                     # the bottom row:
+                                     
+                                     #      B*x_lec + A2*x0  >=  b2
+              
+
+
+
     end
     b_full = [b; b2] # extends b
     c_full = [c; c2] # extends c
@@ -268,16 +296,27 @@ If `path` is given, the same summary table is also written to that CSV file.
 function print_summary(results; path = nothing)
     printstyled("\nSummary (mean over repetitions)\n"; color=:green)
     @printf("%8s %8s %7s %12s %12s %14s\n", "n", "m", "density", "mean time", "std time", "mean iters")
+    
+    # need notes here else I'll forget the syntax
+    # opens csv if and only if we have a path
     io = path === nothing ? nothing : open(path, "w")
+    
+    # this is like javascript's '==='. if io is nothing, then evaluates to true, and we don't run right side.
+    # Otherwise run the right side, which writes to CSV
     io === nothing || println(io, "n,m,density,mean_time,std_time,mean_iters")
+
     for key in unique((r.n, r.m, r.density) for r in results) # for each unique (n, m, density) to avoid duplicate prints
         rs = filter(r -> (r.n, r.m, r.density) == key, results)
         t  = [r.time for r in rs]
         it = [r.iters for r in rs]
         sd = length(t) > 1 ? std(t) : 0.0
         @printf("%8d %8d %7.2f %12.6f %12.6f %14.1f\n", key[1], key[2], key[3], mean(t), sd, mean(it))
+
+        # again, if we have valid io, then write the results to the csv, too.
         io === nothing || println(io, join((key[1], key[2], key[3], mean(t), sd, mean(it)), ","))
     end
+
+    # close if io is valid...
     io === nothing || close(io)
 end
 
@@ -334,7 +373,6 @@ results = run_experiments(
     ,affect_orig_constraints=true
 )
 printstyled("Done!"; color=:green)
-
 print_summary(results; path = "summary.csv")
 save_reps_csv(results, "reps.csv")
 
