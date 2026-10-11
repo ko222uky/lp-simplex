@@ -14,7 +14,6 @@ using JuMP, HiGHS
 using SparseArrays, LinearAlgebra, Random, Statistics, Printf
 
 
-
  ###### LP PROBLEM FUNCTIONS #####
 """
 This generates a random LP with n variables and m constraints. Should be guaranteed to be
@@ -77,11 +76,14 @@ Lecture 7, slide 81, on the Simplex: Tableau example.
 Starting problem as n =4, m = 2 for vars, constraints, respectively.
 """
 function example_lp(
+    # positional args with defaults
     additional_n::Int = 0,
-     additional_m::Int = 0, 
-     density::Float64 = 0.1, 
-     rng = Random.default_rng(),
-     affect_orig_constraints::Bool = true)
+    additional_m::Int = 0
+    ; 
+    # kwargs
+    density::Float64 = 0.1, 
+    rng = Random.default_rng(),
+    affect_orig_constraints::Bool = true)
     # we define A (mxn) with m constraints, n variables
     A = [
         1.0 2.0 -1.0 -1.0;
@@ -167,12 +169,36 @@ function solve_simplex(A, b, c; strategy::Int = 1, presolve::String = "on",
 
     optimize!(model)
 
+    # a vertex in n variables needs exactly n tight inequalities (x_j = 0 or row i at b_i);
+    # more than n tight means the solution is (primal) degenerate.
+    degenerate = false
+    if has_values(model)
+        xv = value.(x)
+
+
+                # count(xv .< 1e-9) is num of variables that are 0 in the solution, i.e., number of tight bounds
+                # so for x = [2 0 0 1], this would be 2.
+                # and count(abs.(A * xv .- b) .< 1e-9) is num of constraint rows that are tight at the solution.
+                # together, these are the total num of tight inequalities out of n + m.
+                # if the num of tight ineq > n, we have degenerate.
+        tight = count(xv .< 1e-9) + count(abs.(A * xv .- b) .< 1e-9)
+        degenerate = tight > n # vertex is where n linearly independent constraints meet.
+                               # but if more constraints are there than is needed to define it, we have     
+                               # primal degeneracy.
+
+                               # just note that this just means we have the same solution,
+                               # but it can have multiple bases since it has extra 0s.
+
+    end
+
     # the return is a named tuple.
     return (
         status = termination_status(model),    # did it complete? did it not???
         time   = solve_time(model),            # solver time only (seconds)
         iters  = simplex_iterations(model),    # equiv to the number of pivots required.
         obj    = has_values(model) ? objective_value(model) : NaN,
+        x      = has_values(model) ? value.(x) : Float64[], # this is the primal solution found
+        degenerate,                            # more than n tight constraints at x
     )
 end
 
@@ -184,12 +210,17 @@ use to get statistical summaries of out experiments..
 Note that with `sizes`, we can define all (n,m) sizes that we want to test,
 and for each of these sizes, we get our `reps` runs.
 
+By default every rep re-solves the same instance, so the spread is runtime noise only.
+Set `vary_instances = true` to draw a new random instance per rep instead.
+
 This can be used with `random_lp`, or one that basically extends an initial LP,
 such as that found in the lecture notes.
 """
 function run_experiments(sizes; reps::Int = 5, density::Float64 = 0.1,
                          strategy::Int = 1, presolve::String = "on", seed::Int = 1234, 
-                         solve_lecture::Bool = false)
+                         solve_lecture::Bool = false, write_rep_csv::Bool = true,
+                         vary_instances::Bool = false,
+                         affect_orig_constraints::Bool = false,)
     # julia uses JIT compilation, so the first can be very long. We allow the
     # precompilation to happen with a warm-up.
     solve_simplex(random_lp(10, 10; density = 0.5, rng = MersenneTwister(0))...;
@@ -198,15 +229,15 @@ function run_experiments(sizes; reps::Int = 5, density::Float64 = 0.1,
     if !solve_lecture
         # vector of named tuples; it's like an immutable dict, basically...
         results = NamedTuple[]
-        @printf("%8s %8s %5s %12s %12s  %s\n", "n", "m", "rep", "time (s)", "iterations", "status")
+        @printf("%8s %8s %5s %7s %12s %12s %14s %6s  %s  %s\n", "n", "m", "rep", "density", "time (s)", "iterations", "obj", "degen", "status", "x")
 
         # runs our replicates for a given (n,m) problem.
         for (n, m) in sizes, rep in 1:reps
-            rng = MersenneTwister(hash((seed, n, m, rep)))   # reproducible per instance, we hash the params + seed
+            rng = MersenneTwister(hash((seed, n, m, vary_instances ? rep : 0)))   # same instance every rep unless vary_instances
             A, b, c = random_lp(n, m; density, rng)
             r = solve_simplex(A, b, c; strategy, presolve, maximize=true)
-            push!(results, (; n, m, rep, r...)) # the ';' is a way of forcing named fields, akin to python's **
-            @printf("%8d %8d %5d %12.4f %12d  %s\n", n, m, rep, r.time, r.iters, r.status)
+            push!(results, (; n, m, rep, density, r...)) # the ';' is a way of forcing named fields, akin to python's **
+            @printf("%8d %8d %5d %7.2f %12.4f %12d %14.6g %6s  %s  %s\n", n, m, rep, density, r.time, r.iters, r.obj, r.degenerate, r.status, round.(r.x; digits = 4))
         end
     else
         # n_init = 4 and n_init=2 is predefined.
@@ -214,15 +245,15 @@ function run_experiments(sizes; reps::Int = 5, density::Float64 = 0.1,
         m_init = 2
         # vector of named tuples; it's like an immutable dict, basically...
         results = NamedTuple[]
-        @printf("%8s %8s %5s %12s %12s  %s\n", "n", "m", "rep", "time (s)", "iterations", "status")
+        @printf("%8s %8s %5s %7s %12s %12s %14s %6s  %s  %s\n", "n", "m", "rep", "density", "time (s)", "iterations", "obj", "degen", "status", "x")
 
         # runs our replicates for a given (n,m) problem.
         for (additional_n, additional_m) in sizes, rep in 1:reps
-            rng = MersenneTwister(hash((seed, additional_n + n_init, additional_m + m_init, rep)))   # reproducible per instance, we hash the params + seed
-            A, b, c = example_lp(additional_n, additional_m; density, rng, affect_orig_constraints = false)
+            rng = MersenneTwister(hash((seed, additional_n + n_init, additional_m + m_init, vary_instances ? rep : 0)))   # same instance every rep unless vary_instances
+            A, b, c = example_lp(additional_n, additional_m; density, rng, affect_orig_constraints)
             r = solve_simplex(A, b, c; strategy, presolve, maximize=false) # so we minimize
-            push!(results, (; n = additional_n + n_init, m = additional_m + m_init, rep, r...)) # the ';' is a way of forcing named fields, akin to python's **
-            @printf("%8d %8d %5d %12.4f %12d  %s\n", additional_n + n_init, additional_m + m_init, rep, r.time, r.iters, r.status)
+            push!(results, (; n = additional_n + n_init, m = additional_m + m_init, rep, density, r...)) # the ';' is a way of forcing named fields, akin to python's **
+            @printf("%8d %8d %5d %7.2f %12.4f %12d %14.6g %6s  %s  %s\n", additional_n + n_init, additional_m + m_init, rep, density, r.time, r.iters, r.obj, r.degenerate, r.status, round.(r.x; digits = 4))
         end
     end
 
@@ -232,28 +263,35 @@ end
 
 """
 Prints out statistics of experimental runs.
+If `path` is given, the same summary table is also written to that CSV file.
 """
-function print_summary(results)
+function print_summary(results; path = nothing)
     printstyled("\nSummary (mean over repetitions)\n"; color=:green)
-    @printf("%8s %8s %12s %12s %14s\n", "n", "m", "mean time", "std time", "mean iters")
-    for key in unique((r.n, r.m) for r in results) # for each unique n,m to avoid duplicate prints./
-        rs = filter(r -> (r.n, r.m) == key, results)
+    @printf("%8s %8s %7s %12s %12s %14s\n", "n", "m", "density", "mean time", "std time", "mean iters")
+    io = path === nothing ? nothing : open(path, "w")
+    io === nothing || println(io, "n,m,density,mean_time,std_time,mean_iters")
+    for key in unique((r.n, r.m, r.density) for r in results) # for each unique (n, m, density) to avoid duplicate prints
+        rs = filter(r -> (r.n, r.m, r.density) == key, results)
         t  = [r.time for r in rs]
         it = [r.iters for r in rs]
-        @printf("%8d %8d %12.4f %12.4f %14.1f\n", key[1], key[2],
-                mean(t), length(t) > 1 ? std(t) : 0.0, mean(it))
+        sd = length(t) > 1 ? std(t) : 0.0
+        @printf("%8d %8d %7.2f %12.6f %12.6f %14.1f\n", key[1], key[2], key[3], mean(t), sd, mean(it))
+        io === nothing || println(io, join((key[1], key[2], key[3], mean(t), sd, mean(it)), ","))
     end
+    io === nothing || close(io)
 end
 
+
 """
-Function to write experiment results to CSV.
-Used in the actual report writing.
+Writes the full output of every replicate (one row per solve), including
+the degeneracy flag and the solution vector x.
 """
-function save_csv(results, path)
+function save_reps_csv(results, path)
     open(path, "w") do io
-        println(io, "n,m,rep,status,time,iters,obj\n")
+        println(io, "n,m,rep,density,status,time,iters,obj,degenerate,x")
         for r in results
-            println(io, join((r.n, r.m, r.rep, r.status, r.time, r.iters, r.obj), ","))
+            x = "\"" * join(r.x, " ") * "\""
+            println(io, join((r.n, r.m, r.rep, r.density, r.status, r.time, r.iters, r.obj, r.degenerate, x), ","))
         end
     end
 end
@@ -267,15 +305,15 @@ end
 ######################################################
 # dummy example with m = n / 2, just to test the behavior of the functions
 # and see that they run.
-sizes = [(n, n ÷ 2) for n in (100, 200, 400, 800)]
-println("Testing sizes (n vars, m constraints): ", sizes)
+# sizes = [(n, n ÷ 2) for n in (100, 200, 400, 800)]
+# println("Testing sizes (n vars, m constraints): ", sizes)
 
-printstyled("Running dummy experiments...\n"; color=:yellow)
-results = run_experiments(sizes; reps = 5, density = 0.05, strategy = 1, presolve = "on")
-printstyled("Done!"; color=:green)
+# printstyled("Running dummy experiments...\n"; color=:yellow)
+# results = run_experiments(sizes; reps = 5, density = 0.5, strategy = 1, presolve = "on", vary_instances=false)
+# printstyled("Done!"; color=:green)
 
-print_summary(results)
-save_csv(results, "dummy_results.csv")
+# print_summary(results; path = "dummy_summary.csv")
+# save_reps_csv(results, "dummy_reps.csv")
 
 ######################################################
 # Lecture LP Experiment 
@@ -286,13 +324,15 @@ additional_sizes = vec(collect(Iterators.product(additional_ns, additional_ms)))
 println("Testing extensions of the lecture example LP: ", additional_sizes)
 
 printstyled("Running lecture experiments...\n"; color=:yellow)
-results = run_experiments(additional_sizes; reps = 5, density = 0.05, strategy = 1, presolve = "on",
+results = run_experiments(additional_sizes; reps = 5, density = 0.1, strategy = 4, presolve = "on",
     solve_lecture=true # ADD THIS TO SOLVE LECTURE LP
+    ,vary_instances=false # the replicate
+    ,affect_orig_constraints=true
 )
 printstyled("Done!"; color=:green)
 
-print_summary(results)
-save_csv(results, "results.csv")
+print_summary(results; path = "summary.csv")
+save_reps_csv(results, "reps.csv")
 
 
 
