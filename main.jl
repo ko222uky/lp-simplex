@@ -324,7 +324,11 @@ additional_sizes = vec(collect(Iterators.product(additional_ns, additional_ms)))
 println("Testing extensions of the lecture example LP: ", additional_sizes)
 
 printstyled("Running lecture experiments...\n"; color=:yellow)
-results = run_experiments(additional_sizes; reps = 5, density = 0.1, strategy = 4, presolve = "on",
+results = run_experiments(
+    additional_sizes; reps = 5, 
+    density = 0.2, # the density of the additional matrix A2 used to extend A...
+    strategy = 4, # should be for primal.
+    presolve = "on",
     solve_lecture=true # ADD THIS TO SOLVE LECTURE LP
     ,vary_instances=false # the replicate
     ,affect_orig_constraints=true
