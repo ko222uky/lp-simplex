@@ -172,7 +172,7 @@ For sequential, non-concurrent strats, we have:
 
 Strategies 2 and 3 should be parallelized versions.
 """
-function solve_simplex(A, b, c; strategy::Int = 1, presolve::String = "on",
+function solve_simplex(A, b, c; strategy::Int = 1, presolve::String = "off",
                        time_limit::Float64 = 600.0, threads::Int = 1, maximize::Bool = false)
     m, n = size(A)
     model = Model(HiGHS.Optimizer)
@@ -367,9 +367,9 @@ println("Testing extensions of the lecture example LP: ", additional_sizes)
 printstyled("Running lecture experiments...\n"; color=:yellow)
 results = run_experiments(
     additional_sizes; reps = 5, 
-    density = 0.2, # the density of the additional matrix A2 used to extend A...
-    strategy = 4, # should be for primal.
-    presolve = "on",
+    density = 0.5 # 0.2, # the density of the additional matrix A2 used to extend A...
+    ,strategy = 4,  # should be for primal.
+    presolve = "off",
     solve_lecture=true # ADD THIS TO SOLVE LECTURE LP
     ,vary_instances=false # the replicate
     ,affect_orig_constraints=true
