@@ -8,6 +8,7 @@ Useful references / documentation:
     * https://jump.dev/JuMP.jl/stable/packages/HiGHS/
     * https://ergo-code.github.io/HiGHS/dev/
 
+    * Complete options at: https://ergo-code.github.io/HiGHS/dev/options/definitions/
 
 =#
 using JuMP, HiGHS
@@ -99,11 +100,14 @@ function example_lp(
     # similar to the random LP function above,
     # but interprets LP as a minimization function, so we flip the operators to their inverse, i.e.,
     # .- for .+ and vice versa.
-    A2  = sprandn(rng, additional_m, additional_n, density) # we can specify the matrix density, to have "holes" in the constraints 
-    x0 = rand(rng, additional_n) 
-    y0 = rand(rng, additional_m) 
-    b2  = A2 * x0 .- rand(rng, additional_m) # built to handle just the A2 part
-    c2  = A2' * y0 .+ rand(rng, additional_n) 
+    
+    # for this, we use integers in range -20 to 20, skipping 0
+    A2 = sprand(rng, additional_m, additional_n, density, (r, k) -> Float64.(rand(r, [-20:-1; 1:20], k)))
+    x0 = rand(rng, 1:20, additional_n)
+    y0 = rand(rng, 1:20, additional_m)
+    b2 = A2 * x0 .- rand(rng, 1:20, additional_m)  # built to handle just the A2 part
+    c2 = A2' * y0 .+ rand(rng, 1:20, additional_n)
+
 
     # this is like adding an independent, non-interacting addition to the original lecture problem.
     # if we want new constraints
@@ -120,8 +124,9 @@ function example_lp(
         # I think this will not guarantee feasibility by doing this.
         # getting INFEASIBLE status...
         m1, n1 = size(A)
-        C  =  abs.(sprandn(rng, m1, additional_n, density))
-        B  = -abs.(sprandn(rng, additional_m, n1, density)) # B is all negative
+        C  =  sprand(rng, m1, additional_n, density, (r, k) -> Float64.(rand(r, 1:20, k)))
+        B  = -sprand(rng, additional_m, n1, density, (r, k) -> Float64.(rand(r, 1:20, k))) # B is all negative
+
         # B  = abs.(sprandn(rng, additional_m, n1, density))
         A_full = [
             A C;
@@ -250,11 +255,11 @@ function run_experiments(sizes; reps::Int = 5, density::Float64 = 0.1,
                          strategy::Int = 1, presolve::String = "on", seed::Int = 1234, 
                          solve_lecture::Bool = false, write_rep_csv::Bool = true,
                          vary_instances::Bool = false,
-                         affect_orig_constraints::Bool = false,)
+                         affect_orig_constraints::Bool = false, threads::Int = 1)
     # julia uses JIT compilation, so the first can be very long. We allow the
     # precompilation to happen with a warm-up.
     solve_simplex(random_lp(10, 10; density = 0.5, rng = MersenneTwister(0))...;
-                strategy, presolve, maximize=true)
+                strategy, presolve, maximize=true, threads=threads)
 
     if !solve_lecture
         # vector of named tuples; it's like an immutable dict, basically...
@@ -278,9 +283,16 @@ function run_experiments(sizes; reps::Int = 5, density::Float64 = 0.1,
         @printf("%8s %8s %5s %7s %12s %12s %14s %6s  %s  %s\n", "n", "m", "rep", "density", "time (s)", "iterations", "obj", "degen", "status", "x")
 
         # runs our replicates for a given (n,m) problem.
+      
         for (additional_n, additional_m) in sizes, rep in 1:reps
             rng = MersenneTwister(hash((seed, additional_n + n_init, additional_m + m_init, vary_instances ? rep : 0)))   # same instance every rep unless vary_instances
             A, b, c = example_lp(additional_n, additional_m; density, rng, affect_orig_constraints)
+           
+            printstyled("\nMatrix A :\n\n", A, color=:green)
+            println("\n\nVector b :\n", b)
+            println("\n\nVector c :\n", c, "\n\n")
+
+    
             r = solve_simplex(A, b, c; strategy, presolve, maximize=false) # so we minimize
             push!(results, (; n = additional_n + n_init, m = additional_m + m_init, rep, density, r...)) # the ';' is a way of forcing named fields, akin to python's **
             @printf("%8d %8d %5d %7.2f %12.4f %12d %14.6g %6s  %s  %s\n", additional_n + n_init, additional_m + m_init, rep, density, r.time, r.iters, r.obj, r.degenerate, r.status, round.(r.x; digits = 4))
@@ -368,8 +380,9 @@ printstyled("Running lecture experiments...\n"; color=:yellow)
 results = run_experiments(
     additional_sizes; reps = 5, 
     density = 0.5 # 0.2, # the density of the additional matrix A2 used to extend A...
-    ,strategy = 4,  # should be for primal.
-    presolve = "off",
+    ,strategy = 1  # should be 1 for the dual method.
+    ,threads=1     # only applicable for strategy 2 or 3, but I failed to get those to work.
+    ,presolve = "off",
     solve_lecture=true # ADD THIS TO SOLVE LECTURE LP
     ,vary_instances=false # the replicate
     ,affect_orig_constraints=true
